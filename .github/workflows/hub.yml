@@ -2,7 +2,8 @@ name: ci
 
 on:
   push:
-    branches: master
+    branches: 
+      - master
 
 jobs:
   multi:
@@ -50,7 +51,5 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache
           tags: |
-            akhilrex/podgrab:latest
-            akhilrex/podgrab:1.0.0
-            ghcr.io/akhilrex/podgrab:latest
-            ghcr.io/akhilrex/podgrab:1.0.0
+            karsai5/podgrab:latest
+            karsai5/podgrab:1.0.0

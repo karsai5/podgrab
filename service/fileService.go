@@ -22,7 +22,7 @@ import (
 	stringy "github.com/gobeam/stringy"
 )
 
-func Download(link string, episodeTitle string, podcastName string, prefix string) (string, error) {
+func Download(link string, episodeTitle string, pubdate time.Time, podcastName string, prefix string) (string, error) {
 	if link == "" {
 		return "", errors.New("Download path empty")
 	}
@@ -43,6 +43,7 @@ func Download(link string, episodeTitle string, podcastName string, prefix strin
 	if prefix != "" {
 		fileName = fmt.Sprintf("%s-%s", prefix, fileName)
 	}
+	fileName = fmt.Sprintf("%s %s", pubdate.Format("2006-01-02"), fileName)
 	folder := createDataFolderIfNotExists(podcastName)
 	finalPath := path.Join(folder, fileName)
 

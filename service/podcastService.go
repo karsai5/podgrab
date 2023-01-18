@@ -16,6 +16,7 @@ import (
 	"github.com/akhilrex/podgrab/db"
 	"github.com/akhilrex/podgrab/model"
 	"github.com/antchfx/xmlquery"
+	"github.com/bogem/id3v2"
 	strip "github.com/grokify/html-strip-tags-go"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -35,7 +36,7 @@ func ParseOpml(content string) (model.OpmlModel, error) {
 	return response, err
 }
 
-//FetchURL is
+// FetchURL is
 func FetchURL(url string) (model.PodcastData, []byte, error) {
 	body, err := makeQuery(url)
 	if err != nil {
@@ -411,21 +412,21 @@ func DownloadMissingImages() error {
 	return nil
 }
 
-func downloadImageLocally(podcastItemId string) error {
+func downloadImageLocally(podcastItemId string) (string, error) {
 	var podcastItem db.PodcastItem
 	err := db.GetPodcastItemById(podcastItemId, &podcastItem)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	path, err := DownloadImage(podcastItem.Image, podcastItem.ID, podcastItem.Podcast.Title)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	podcastItem.LocalImage = path
 
-	return db.UpdatePodcastItem(&podcastItem)
+	return path, db.UpdatePodcastItem(&podcastItem)
 }
 
 func SetPodcastItemBookmarkStatus(id string, bookmark bool) error {
@@ -533,7 +534,7 @@ func DownloadMissingEpisodes() error {
 		wg.Add(1)
 		go func(item db.PodcastItem, setting db.Setting) {
 			defer wg.Done()
-			url, _ := Download(item.FileURL, item.Title, item.Podcast.Title, GetPodcastPrefix(&item, &setting))
+			url, _ := Download(item.FileURL, item.Title, item.PubDate, item.Podcast.Title, GetPodcastPrefix(&item, &setting))
 			SetPodcastItemAsDownloaded(item.ID, url)
 		}(item, *setting)
 
@@ -600,16 +601,63 @@ func DownloadSingleEpisode(podcastItemId string) error {
 	setting := db.GetOrCreateSetting()
 	SetPodcastItemAsQueuedForDownload(podcastItemId)
 
-	url, err := Download(podcastItem.FileURL, podcastItem.Title, podcastItem.Podcast.Title, GetPodcastPrefix(&podcastItem, setting))
+	path, err := Download(podcastItem.FileURL, podcastItem.Title, podcastItem.PubDate, podcastItem.Podcast.Title, GetPodcastPrefix(&podcastItem, setting))
+
+	tag, err := id3v2.Open(path, id3v2.Options{Parse: true})
+
+	if err != nil {
+		Logger.Errorw("Error while opening mp3 file: ", err)
+	}
+	defer tag.Close()
+
+	// Set tags.
+	tag.SetArtist(podcastItem.Podcast.Author)
+	tag.SetAlbum(podcastItem.Podcast.Title)
+	tag.SetTitle(podcastItem.Title)
+	tag.SetGenre("Podcast")
+	tag.AddFrame("TDAT", id3v2.TextFrame{Encoding: id3v2.EncodingUTF8, Text: podcastItem.PubDate.Format("2006-01-01")})
+
+	summary := id3v2.CommentFrame{
+		Encoding:    id3v2.EncodingUTF8,
+		Language:    "eng",
+		Description: "Summary",
+		Text:        podcastItem.Summary,
+	}
+
+	tag.AddCommentFrame(summary)
+
+	err = SetPodcastItemAsDownloaded(podcastItem.ID, path)
+
+	imagePath, err := downloadImageLocally(podcastItem.ID)
+	if len(imagePath) == 0 {
+		imagePath = podcastItem.Podcast.Image
+	}
+
+	if len(imagePath) > 0 {
+		artwork, err := ioutil.ReadFile(imagePath)
+		if err != nil {
+			Logger.Errorw("Error while reading artwork file", err)
+		}
+
+		pic := id3v2.PictureFrame{
+			Encoding:    id3v2.EncodingUTF8,
+			MimeType:    "image/jpeg",
+			PictureType: id3v2.PTFrontCover,
+			Description: "Front cover",
+			Picture:     artwork,
+		}
+		tag.AddAttachedPicture(pic)
+
+	}
 
 	if err != nil {
 		fmt.Println(err.Error())
 		return err
 	}
-	err = SetPodcastItemAsDownloaded(podcastItem.ID, url)
 
-	if setting.DownloadEpisodeImages {
-		downloadImageLocally(podcastItem.ID)
+	// Write tag to file.mp3.
+	if err = tag.Save(); err != nil {
+		Logger.Errorw("Error while saving a tag: ", err)
 	}
 	return err
 }
